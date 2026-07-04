@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "echorank-scheduler",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  // Runs daily; the handler itself decides which brands are actually due
+  // based on their plan cadence (free = weekly, pro = daily).
+  "triggers": {
+    "crons": ["0 13 * * *"]
+  },
+  "vars": {
+    // Non-secret. Secrets (SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY,
+    // GEMINI_API_KEY, PERPLEXITY_API_KEY, RESEND_API_KEY) are set with
+    // `wrangler secret put <NAME>` and are not listed here.
+    "SUPABASE_URL": "https://YOUR-PROJECT.supabase.co"
+  }
+}
