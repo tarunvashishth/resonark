@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Separate Wrangler project with its own tooling/runtime.
+    "workers/**",
   ]),
 ]);
 
