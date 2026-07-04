@@ -2,7 +2,7 @@
 
 ## 1. Migrate persistence from local JSON store to Supabase
 
-**Priority note (2026-07-04, /plan-eng-review):** Bumped to "next up" after the context-view dashboard feature ships. That feature's whole point is validating the SEO-vs-AI-mention wedge with a real prospect (Shubham), but it can only run on localhost until this migration lands — a live URL is a much stronger validation artifact than a screen recording.
+**Priority note (2026-07-04, /plan-eng-review):** Bumped to "next up" after the context-view dashboard feature ships. That feature's whole point is validating the SEO-vs-AI-mention wedge with a real prospect (the agency-owner contact), but it can only run on localhost until this migration lands — a live URL is a much stronger validation artifact than a screen recording.
 
 **What:** Replace `src/lib/db.ts` and `src/lib/auth.ts` with real Supabase (Postgres + Auth) calls.
 
@@ -58,7 +58,7 @@
 
 **Cons:** Real NLP/NER work, not a data-reshape — meaningfully more effort than v1. Content-gap signals (author bio, structured data) likely require new scraping/crawling infrastructure, not just LLM response parsing.
 
-**Depends on:** v1 shipping and proving useful in front of real users; validation replies from The Assignment (Shubham + 2-3 more agency owners) confirming the wedge holds. Do not start this before that signal comes back positive — see the design doc's Fallback section.
+**Depends on:** v1 shipping and proving useful in front of real users; validation replies from The Assignment (the agency-owner contact + 2-3 more agency owners) confirming the wedge holds. Do not start this before that signal comes back positive — see the design doc's Fallback section.
 
 ---
 
