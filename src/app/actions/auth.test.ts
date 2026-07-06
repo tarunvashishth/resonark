@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Brand, User } from "@/lib/types";
 
 const state: { brands: Brand[] } = { brands: [] };
@@ -11,12 +11,16 @@ vi.mock("next/navigation", () => ({
   redirect: (url: string) => redirectMock(url),
 }));
 
-const signInWithEmailMock = vi.fn();
+const sendEmailCodeMock = vi.fn();
+const verifyEmailCodeMock = vi.fn();
 const signOutMock = vi.fn();
+const getSessionMock = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
-  signInWithEmail: (...args: unknown[]) => signInWithEmailMock(...args),
+  sendEmailCode: (...args: unknown[]) => sendEmailCodeMock(...args),
+  verifyEmailCode: (...args: unknown[]) => verifyEmailCodeMock(...args),
   signOut: (...args: unknown[]) => signOutMock(...args),
+  getSession: (...args: unknown[]) => getSessionMock(...args),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -25,74 +29,72 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-const { devSignIn, signOutAction } = await import("./auth");
+const { sendEmailCodeAction, verifyEmailCodeAction, signOutAction } = await import("./auth");
 
 function makeUser(overrides: Partial<User> = {}): User {
   return { id: "u1", email: "test@example.com", plan: "free", createdAt: "", ...overrides };
 }
 
-function formDataWith(email: string): FormData {
+function formDataWith(fields: Record<string, string>): FormData {
   const fd = new FormData();
-  fd.set("email", email);
+  for (const [k, v] of Object.entries(fields)) fd.set(k, v);
   return fd;
 }
 
 beforeEach(() => {
   state.brands = [];
   redirectMock.mockClear();
-  signInWithEmailMock.mockReset();
+  sendEmailCodeMock.mockReset();
+  verifyEmailCodeMock.mockReset();
   signOutMock.mockReset();
+  getSessionMock.mockReset();
 });
 
-describe("devSignIn", () => {
-  const originalEnv = process.env.NODE_ENV;
-  const originalAllow = process.env.ALLOW_DEV_SIGNIN;
-
-  afterEach(() => {
-    vi.stubEnv("NODE_ENV", originalEnv ?? "test");
-    if (originalAllow === undefined) delete process.env.ALLOW_DEV_SIGNIN;
-    else process.env.ALLOW_DEV_SIGNIN = originalAllow;
+describe("sendEmailCodeAction", () => {
+  it("rejects an invalid email without calling sendEmailCode", async () => {
+    await expect(sendEmailCodeAction(formDataWith({ email: "not-an-email" }))).rejects.toThrow();
+    expect(sendEmailCodeMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an invalid email without calling signInWithEmail", async () => {
-    await expect(devSignIn(formDataWith("not-an-email"))).rejects.toThrow();
-    expect(signInWithEmailMock).not.toHaveBeenCalled();
+  it("sends a code to the given email", async () => {
+    await sendEmailCodeAction(formDataWith({ email: "test@example.com" }));
+    expect(sendEmailCodeMock).toHaveBeenCalledWith("test@example.com");
+  });
+});
+
+describe("verifyEmailCodeAction", () => {
+  it("rejects a too-short code without calling verifyEmailCode", async () => {
+    await expect(
+      verifyEmailCodeAction(formDataWith({ email: "test@example.com", code: "123" }))
+    ).rejects.toThrow();
+    expect(verifyEmailCodeMock).not.toHaveBeenCalled();
   });
 
-  it("refuses to run in production without the escape hatch", async () => {
-    vi.stubEnv("NODE_ENV", "production");
-    delete process.env.ALLOW_DEV_SIGNIN;
-    await expect(devSignIn(formDataWith("test@example.com"))).rejects.toThrow(/disabled in production/);
-    expect(signInWithEmailMock).not.toHaveBeenCalled();
-  });
-
-  it("refuses to run when ALLOW_DEV_SIGNIN is set to a falsy-looking string like 'false' (truthy-string footgun)", async () => {
-    vi.stubEnv("NODE_ENV", "production");
-    process.env.ALLOW_DEV_SIGNIN = "false";
-    await expect(devSignIn(formDataWith("test@example.com"))).rejects.toThrow(/disabled in production/);
-    expect(signInWithEmailMock).not.toHaveBeenCalled();
-  });
-
-  it("allows devSignIn in production when ALLOW_DEV_SIGNIN is explicitly set", async () => {
-    vi.stubEnv("NODE_ENV", "production");
-    process.env.ALLOW_DEV_SIGNIN = "true";
-    signInWithEmailMock.mockResolvedValue(makeUser({ id: "u1" }));
+  it("redirects to /onboarding when the verified user has no brands yet", async () => {
+    verifyEmailCodeMock.mockResolvedValue(undefined);
+    getSessionMock.mockResolvedValue(makeUser({ id: "u1" }));
     state.brands = [];
-    await expect(devSignIn(formDataWith("test@example.com"))).rejects.toThrow("REDIRECT:/onboarding");
+    await expect(
+      verifyEmailCodeAction(formDataWith({ email: "test@example.com", code: "123456" }))
+    ).rejects.toThrow("REDIRECT:/onboarding");
+    expect(verifyEmailCodeMock).toHaveBeenCalledWith("test@example.com", "123456");
   });
 
-  it("redirects to /onboarding when the signed-in user has no brands yet", async () => {
-    signInWithEmailMock.mockResolvedValue(makeUser({ id: "u1" }));
-    state.brands = [];
-    await expect(devSignIn(formDataWith("test@example.com"))).rejects.toThrow("REDIRECT:/onboarding");
-    expect(redirectMock).toHaveBeenCalledWith("/onboarding");
-  });
-
-  it("redirects to /dashboard when the signed-in user already has a brand", async () => {
-    signInWithEmailMock.mockResolvedValue(makeUser({ id: "u1" }));
+  it("redirects to /dashboard when the verified user already has a brand", async () => {
+    verifyEmailCodeMock.mockResolvedValue(undefined);
+    getSessionMock.mockResolvedValue(makeUser({ id: "u1" }));
     state.brands = [{ id: "b1", userId: "u1", name: "Acme", domain: "acme.com", category: "x", competitors: [], createdAt: "" }];
-    await expect(devSignIn(formDataWith("test@example.com"))).rejects.toThrow("REDIRECT:/dashboard");
-    expect(redirectMock).toHaveBeenCalledWith("/dashboard");
+    await expect(
+      verifyEmailCodeAction(formDataWith({ email: "test@example.com", code: "123456" }))
+    ).rejects.toThrow("REDIRECT:/dashboard");
+  });
+
+  it("propagates a wrong-code error without redirecting", async () => {
+    verifyEmailCodeMock.mockRejectedValue(new Error("Token has expired or is invalid"));
+    await expect(
+      verifyEmailCodeAction(formDataWith({ email: "test@example.com", code: "000000" }))
+    ).rejects.toThrow("Token has expired or is invalid");
+    expect(redirectMock).not.toHaveBeenCalled();
   });
 });
 
