@@ -44,6 +44,9 @@ yarn-error.log*
 /.open-next
 /.wrangler
 
+# supabase CLI local cache (project ref, pooler URL — machine-local state)
+/supabase/.temp
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
