@@ -15,10 +15,10 @@ export default async function DashboardPage() {
   const user = await getSession();
   if (!user) redirect("/login");
 
-  const brands = db.listBrandsByUser(user.id);
+  const brands = await db.listBrandsByUser(user.id);
   if (brands.length === 0) redirect("/onboarding");
   const brand = brands[0];
-  const data = buildDashboard(brand);
+  const data = await buildDashboard(brand);
   const limits = PLAN_LIMITS[user.plan];
 
   return (

@@ -23,13 +23,13 @@ function domainOf(url: string): string {
   }
 }
 
-export function buildDashboard(brand: Brand): DashboardData {
-  const prompts = db.listPromptsByBrand(brand.id);
-  const allRuns = db.listRunsByBrand(brand.id);
+export async function buildDashboard(brand: Brand): Promise<DashboardData> {
+  const prompts = await db.listPromptsByBrand(brand.id);
+  const allRuns = await db.listRunsByBrand(brand.id);
   const runs = allRuns.filter((r) => r.status === "ok");
   const errorRuns = allRuns.length - runs.length;
   const runIds = runs.map((r) => r.id);
-  const mentions = db.listMentionsByRunIds(runIds);
+  const mentions = await db.listMentionsByRunIds(runIds);
 
   const mentionsByRun = new Map<string, Mention[]>();
   for (const m of mentions) {
@@ -107,6 +107,6 @@ export function buildDashboard(brand: Brand): DashboardData {
   return { visibilityScore, totalRuns: runs.length, errorRuns, trend, perEngine, shareOfVoice, promptRows, citedDomains };
 }
 
-export function listRunsForPrompt(promptId: string): Run[] {
-  return db.listRunsByPrompt(promptId).sort((a, b) => b.ranAt.localeCompare(a.ranAt));
+export async function listRunsForPrompt(promptId: string): Promise<Run[]> {
+  return (await db.listRunsByPrompt(promptId)).sort((a, b) => b.ranAt.localeCompare(a.ranAt));
 }

@@ -13,7 +13,7 @@ import type { Brand, Plan } from "./types";
  * in sync intentionally when editing either one.
  */
 export async function runBrandNow(brand: Brand, plan: Plan) {
-  const prompts = db.listPromptsByBrand(brand.id).filter((p) => p.active);
+  const prompts = (await db.listPromptsByBrand(brand.id)).filter((p) => p.active);
   const engines = PLAN_LIMITS[plan].engines;
   const ctx = { brand: brand.name, domain: brand.domain, competitors: brand.competitors };
 
@@ -23,7 +23,7 @@ export async function runBrandNow(brand: Brand, plan: Plan) {
       const adapter = ENGINES[engineName];
       try {
         const result = await adapter.ask(prompt.text, ctx);
-        const run = db.createRun({
+        const run = await db.createRun({
           promptId: prompt.id,
           engine: engineName,
           ranAt: new Date().toISOString(),
@@ -32,10 +32,10 @@ export async function runBrandNow(brand: Brand, plan: Plan) {
           status: "ok",
         });
         const mentions = extractMentions(result.text, ctx);
-        db.createMentions(mentions.map((m) => ({ ...m, runId: run.id })));
+        await db.createMentions(mentions.map((m) => ({ ...m, runId: run.id })));
         runCount++;
       } catch (err) {
-        db.createRun({
+        await db.createRun({
           promptId: prompt.id,
           engine: engineName,
           ranAt: new Date().toISOString(),
