@@ -1,20 +1,20 @@
 # TODOs
 
-## 1. Migrate persistence from local JSON store to Supabase
+## Completed
 
-**Priority note (2026-07-04, /plan-eng-review):** Bumped to "next up" after the context-view dashboard feature ships. That feature's whole point is validating the SEO-vs-AI-mention wedge with a real prospect (the agency-owner contact), but it can only run on localhost until this migration lands — a live URL is a much stronger validation artifact than a screen recording.
+### 1. Migrate persistence from local JSON store to Supabase
 
-**What:** Replace `src/lib/db.ts` and `src/lib/auth.ts` with real Supabase (Postgres + Auth) calls.
+**Completed:** 2026-07-05. Provisioned a real Supabase project (`echorank`, region ap-northeast-1), applied `supabase/migrations/0001_init.sql`, and rewrote `src/lib/db.ts` and `src/lib/auth.ts` against it.
 
-**Why:** Confirmed via a real `wrangler dev` deploy test (2026-07-04) that the current file-based store cannot run on Cloudflare Workers at all — `fs.mkdirSync`/`fs.writeFileSync` throw `EPERM: operation not permitted` under workerd's `nodejs_compat` shim the moment any write path executes (login, onboarding, run now). Meanwhile `workers/scheduler/` already talks to Supabase over REST and expects an `auth.users`/`profiles` schema that nothing currently populates. The app and the cron worker are not wired to the same database today.
+**What changed from the original plan:**
+- `db.ts` is now fully async, querying Postgres via `@supabase/supabase-js`/`@supabase/ssr` through a per-request server client (`src/lib/supabase/server.ts`) so every query goes through RLS as the logged-in user. All callers (`runner.ts`, `scoring.ts`, server actions, dashboard/onboarding pages) updated to `await`.
+- Auth is real Supabase Auth — but as **email OTP code**, not magic link. Magic link's PKCE code-exchange (a separate `/auth/callback` route) couldn't be verified live in this environment (no inbox access, and Supabase's default email sender is rate-limited) and had an unresolved cross-request cookie question. Email-OTP-code verification happens in one request (`verifyEmailCodeAction`), which is simpler and was verified end-to-end against the real project (session establishment, cookie persistence across a separate request, onboarding, brand creation, run, and the context-view feature all confirmed working).
+- `src/lib/session-token.ts` (custom HMAC cookie scheme) and `devSignIn` are gone — fully superseded by real Supabase Auth.
+- Added `src/proxy.ts` (Next.js 16 renamed `middleware.ts` → `proxy.ts`) to refresh the auth session cookie on every request, per `@supabase/ssr`'s required pattern.
 
-**Pros:** Unblocks any real Cloudflare deploy; unifies the Next app and the scheduler worker onto one database; RLS policies and the schema already exist (`supabase/migrations/0001_init.sql`), so the SQL side is done.
+**Verified against the real Supabase project:** signup → profile creation (via the `handle_new_user` trigger) → onboarding → brand creation → run → dashboard → context-view (competitor mentions + raw response text), all working with real Postgres + RLS.
 
-**Cons:** Every caller of `db.ts`/`auth.ts` needs updating to async Supabase calls — a real rewrite, not a config swap.
-
-**Depends on:** A Supabase project being provisioned (needs an account/login not available in the session that built this MVP).
-
-**Context for whoever picks this up:** Read `src/lib/db.ts`'s top comment and the README's "Status" section first — they document exactly what breaks and why. The schema in `supabase/migrations/0001_init.sql` is the target shape; `db.ts`'s function signatures are the contract callers already expect, so preserve them where possible to minimize the caller-side diff.
+**Still open:** the app remains local-dev-only (not yet deployed to Cloudflare) — that's the next real step to unlock actually reaching a real prospect, per the original motivation for this migration.
 
 ---
 
@@ -120,46 +120,6 @@
 **Depends on:** Nothing blocking — can be picked up any time, independently of each other.
 
 ---
-
-## 9. Assert the devSignIn production gate actually holds at deploy time
-
-**What:** `devSignIn` (`src/app/actions/auth.ts`) is gated behind `process.env.NODE_ENV === "production"`. On Cloudflare Workers via `@opennextjs/cloudflare`, this currently works because OpenNext's esbuild config statically defines `NODE_ENV` to the literal `"production"` at build time — but that's an undocumented, unenforced implementation detail of the adapter, not something this repo tests or asserts.
-
-**Why:** Surfaced during `/ship`'s red-team review (2026-07-04). If a future OpenNext version changes this define, or the project is ever deployed via a different Next.js adapter/runtime, the gate could silently stop firing with no test catching it — re-opening the devSignIn account-takeover path (TODOS.md's fixed security finding) in production.
-
-**Pros:** Cheap insurance against a silent regression in a security-critical gate.
-
-**Cons:** Needs either a runtime boot-time assertion/log, or a build/deploy-time smoke test that inspects the OpenNext output bundle — neither is a pure unit test.
-
-**Depends on:** Nothing blocking — can be picked up any time.
-
----
-
-## 10. Harden session tokens: constant-time comparison + expiry/revocation
-
-**What:** `src/lib/session-token.ts`'s `verify()` compares the HMAC with plain `===`, which is not constant-time (a timing side-channel against a value explicitly meant to prevent forgeable cookies). Separately, `sign()` embeds no timestamp/nonce, so a session HMAC never expires — only the cookie's client-controlled `maxAge` bounds its life, and there's no way to revoke one user's session without rotating `SESSION_SECRET` for everyone.
-
-**Why:** Surfaced during `/ship`'s adversarial review (2026-07-04). On a local-JSON MVP with no real users yet, low practical exploitability today — but both gaps undermine the stated security goal of the module and should close before real signups exist.
-
-**Pros:** Closes a real timing side-channel; adds the ability to expire/revoke sessions (needed for any real "sign out everywhere" or compromise-response flow).
-
-**Cons:** Expiry/revocation is a real feature (embed + check a timestamp, decide the expiry window) — not a one-line fix. Constant-time comparison alone is small (`crypto.timingSafeEqual` on fixed-length buffers, with a length-mismatch guard since it throws on unequal lengths).
-
-**Depends on:** Nothing blocking — can be picked up any time; the constant-time fix is independent and cheaper than expiry/revocation.
-
----
-
-## 11. Race condition in createBrandWithPrompts' free-plan brand limit
-
-**What:** `src/app/actions/onboarding.ts`'s `createBrandWithPrompts` reads `listBrandsByUser` to check the free plan's `maxBrands` limit, then later calls `db.createBrand` — the same check-then-act shape as the `runNowAction` cooldown race just fixed in this session (TODOS.md's fixed findings). Two concurrent `createBrandWithPrompts` calls for the same user could both read "0 brands" and both create one, exceeding `maxBrands`.
-
-**Why:** Surfaced during `/ship`'s adversarial review (2026-07-04) — same bug class as the just-fixed `runNowAction` race, same fix shape applies (an in-memory per-user lock, since the app is a single process today).
-
-**Pros:** Small, well-understood fix using the exact pattern already applied elsewhere in this diff.
-
-**Cons:** None significant — deferred only because the ship session was already long; this is genuinely cheap to do.
-
-**Depends on:** Nothing blocking — can be picked up any time.
 
 ---
 

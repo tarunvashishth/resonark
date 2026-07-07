@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0.0] - 2026-07-05
+
+### Added
+- Real sign-in: a 6-digit code is emailed to you and verified in the app — no more instant unverified sign-in.
+
+### Changed
+- All your data (brands, prompts, checks, results) now lives in a real cloud database (Supabase Postgres) instead of a local file, with per-user row-level security. This clears the main blocker to deploying the app to a real URL.
+
+### Removed
+- The dev-only fake sign-in and its custom session-cookie scheme, both fully replaced by Supabase Auth.
+
 ## [0.2.0.0] - 2026-07-04
 
 ### Added
