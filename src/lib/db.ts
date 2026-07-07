@@ -1,157 +1,231 @@
-import fs from "node:fs";
-import path from "node:path";
-import { nanoid } from "nanoid";
-import type { Brand, Mention, Prompt, Run, User } from "./types";
+import { createClient } from "./supabase/server";
+import type { Brand, Mention, Prompt, Run } from "./types";
 
 /**
- * Local JSON-file data store standing in for Supabase/Postgres during MVP
- * dev. Every function here maps 1:1 to a query we'll eventually run against
- * Supabase, so swapping the implementation later doesn't require touching
- * callers — BUT this is a real rewrite, not a config swap:
+ * Supabase-backed persistence (see supabase/migrations/0001_init.sql for the
+ * schema). Replaces the local-JSON-file MVP store — every function here is
+ * now async and goes through RLS as the calling user's session, so ownership
+ * is enforced at the database layer, not just in the Server Action.
  *
- * - This only runs under `next dev` / `next start` (real Node.js, real
- *   filesystem). It CANNOT run on Cloudflare Workers: verified by deploying
- *   this app locally via `wrangler dev` — fs.mkdirSync throws
- *   `EPERM: operation not permitted` the moment any write path executes,
- *   because workerd's nodejs_compat shim has no writable filesystem.
- * - The Cloudflare Worker in workers/scheduler/ already talks to Supabase
- *   over REST (see workers/scheduler/src/supabase.ts) and expects
- *   auth.users/profiles rows this store never creates — the two halves of
- *   this project are not wired to the same data today.
- *
- * Production readiness requires: provision a Supabase project, apply
- * supabase/migrations/0001_init.sql, replace this file's functions with
- * @supabase/supabase-js calls, and replace src/lib/auth.ts's cookie scheme
- * with supabase.auth.*. Until then, "deploy to Cloudflare" is not a
- * config change away — it's this rewrite away.
+ * User rows are no longer created here: Supabase Auth creates auth.users on
+ * signup, and the `handle_new_user` trigger mirrors it into `profiles`. See
+ * src/lib/auth.ts for session/profile reads.
  */
 
-interface DbShape {
-  users: User[];
-  brands: Brand[];
-  prompts: Prompt[];
-  runs: Run[];
-  mentions: Mention[];
+interface BrandRow {
+  id: string;
+  user_id: string;
+  name: string;
+  domain: string;
+  category: string;
+  competitors: string[];
+  created_at: string;
 }
 
-const DB_PATH = path.join(process.cwd(), ".data", "db.json");
-
-function emptyDb(): DbShape {
-  return { users: [], brands: [], prompts: [], runs: [], mentions: [] };
+function toBrand(row: BrandRow): Brand {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    domain: row.domain,
+    category: row.category,
+    competitors: row.competitors,
+    createdAt: row.created_at,
+  };
 }
 
-function load(): DbShape {
-  if (!fs.existsSync(DB_PATH)) {
-    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    fs.writeFileSync(DB_PATH, JSON.stringify(emptyDb(), null, 2));
-  }
-  return JSON.parse(fs.readFileSync(DB_PATH, "utf-8")) as DbShape;
+interface PromptRow {
+  id: string;
+  brand_id: string;
+  text: string;
+  intent_category: string;
+  active: boolean;
+  created_at: string;
 }
 
-function save(db: DbShape) {
-  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+function toPrompt(row: PromptRow): Prompt {
+  return {
+    id: row.id,
+    brandId: row.brand_id,
+    text: row.text,
+    intentCategory: row.intent_category,
+    active: row.active,
+    createdAt: row.created_at,
+  };
 }
 
-// Every exported method below is synchronous (readFileSync/writeFileSync,
-// no `await` in between load() and save()), so within this single Node
-// process it can't be preempted mid-call — two concurrent requests calling
-// the same or different db methods serialize naturally on Node's event
-// loop. This invariant breaks if a method is ever changed to use async fs
-// calls, or if a caller inserts an `await` between two db calls that need
-// to be read-modify-write atomic (e.g. "check a limit, then create a row")
-// — at that point add real locking rather than assuming this still holds.
+interface RunRow {
+  id: string;
+  prompt_id: string;
+  engine: Run["engine"];
+  ran_at: string;
+  response_text: string;
+  cited_urls: string[];
+  status: Run["status"];
+}
 
-export const id = () => nanoid(12);
+function toRun(row: RunRow): Run {
+  return {
+    id: row.id,
+    promptId: row.prompt_id,
+    engine: row.engine,
+    ranAt: row.ran_at,
+    responseText: row.response_text,
+    citedUrls: row.cited_urls,
+    status: row.status,
+  };
+}
+
+interface MentionRow {
+  id: string;
+  run_id: string;
+  entity_name: string;
+  is_own_brand: boolean;
+  mentioned: boolean;
+  rank: number | null;
+  sentiment: Mention["sentiment"];
+}
+
+function toMention(row: MentionRow): Mention {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    entityName: row.entity_name,
+    isOwnBrand: row.is_own_brand,
+    mentioned: row.mentioned,
+    rank: row.rank,
+    sentiment: row.sentiment,
+  };
+}
 
 export const db = {
-  // --- users ---
-  getUserByEmail(email: string): User | undefined {
-    return load().users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-  },
-  getUserById(userId: string): User | undefined {
-    return load().users.find((u) => u.id === userId);
-  },
-  upsertUserByEmail(email: string): User {
-    const data = load();
-    let user = data.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-    if (!user) {
-      user = { id: id(), email, plan: "free", createdAt: new Date().toISOString() };
-      data.users.push(user);
-      save(data);
-    }
-    return user;
-  },
-
   // --- brands ---
-  listBrandsByUser(userId: string): Brand[] {
-    return load().brands.filter((b) => b.userId === userId);
+  async listBrandsByUser(userId: string): Promise<Brand[]> {
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("brands").select("*").eq("user_id", userId);
+    if (error) throw error;
+    return (data as BrandRow[]).map(toBrand);
   },
-  getBrand(brandId: string): Brand | undefined {
-    return load().brands.find((b) => b.id === brandId);
+  async getBrand(brandId: string): Promise<Brand | undefined> {
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("brands").select("*").eq("id", brandId).maybeSingle();
+    if (error) throw error;
+    return data ? toBrand(data as BrandRow) : undefined;
   },
-  createBrand(input: Omit<Brand, "id" | "createdAt">): Brand {
-    const data = load();
-    const brand: Brand = { ...input, id: id(), createdAt: new Date().toISOString() };
-    data.brands.push(brand);
-    save(data);
-    return brand;
+  async createBrand(input: Omit<Brand, "id" | "createdAt">): Promise<Brand> {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("brands")
+      .insert({
+        user_id: input.userId,
+        name: input.name,
+        domain: input.domain,
+        category: input.category,
+        competitors: input.competitors,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return toBrand(data as BrandRow);
   },
-  deleteBrand(brandId: string) {
-    const data = load();
-    data.brands = data.brands.filter((b) => b.id !== brandId);
-    const promptIds = data.prompts.filter((p) => p.brandId === brandId).map((p) => p.id);
-    data.prompts = data.prompts.filter((p) => p.brandId !== brandId);
-    const runIds = data.runs.filter((r) => promptIds.includes(r.promptId)).map((r) => r.id);
-    data.runs = data.runs.filter((r) => !promptIds.includes(r.promptId));
-    data.mentions = data.mentions.filter((m) => !runIds.includes(m.runId));
-    save(data);
+  async deleteBrand(brandId: string): Promise<void> {
+    const supabase = await createClient();
+    // prompts/runs/mentions cascade via foreign keys (on delete cascade in the schema).
+    const { error } = await supabase.from("brands").delete().eq("id", brandId);
+    if (error) throw error;
   },
 
   // --- prompts ---
-  listPromptsByBrand(brandId: string): Prompt[] {
-    return load().prompts.filter((p) => p.brandId === brandId);
+  async listPromptsByBrand(brandId: string): Promise<Prompt[]> {
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("prompts").select("*").eq("brand_id", brandId);
+    if (error) throw error;
+    return (data as PromptRow[]).map(toPrompt);
   },
-  getPrompt(promptId: string): Prompt | undefined {
-    return load().prompts.find((p) => p.id === promptId);
+  async getPrompt(promptId: string): Promise<Prompt | undefined> {
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("prompts").select("*").eq("id", promptId).maybeSingle();
+    if (error) throw error;
+    return data ? toPrompt(data as PromptRow) : undefined;
   },
-  createPrompt(input: Omit<Prompt, "id" | "createdAt">): Prompt {
-    const data = load();
-    const prompt: Prompt = { ...input, id: id(), createdAt: new Date().toISOString() };
-    data.prompts.push(prompt);
-    save(data);
-    return prompt;
+  async createPrompt(input: Omit<Prompt, "id" | "createdAt">): Promise<Prompt> {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("prompts")
+      .insert({
+        brand_id: input.brandId,
+        text: input.text,
+        intent_category: input.intentCategory,
+        active: input.active,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return toPrompt(data as PromptRow);
   },
-  setPromptActive(promptId: string, active: boolean) {
-    const data = load();
-    const p = data.prompts.find((p) => p.id === promptId);
-    if (p) p.active = active;
-    save(data);
+  async setPromptActive(promptId: string, active: boolean): Promise<void> {
+    const supabase = await createClient();
+    const { error } = await supabase.from("prompts").update({ active }).eq("id", promptId);
+    if (error) throw error;
   },
 
   // --- runs & mentions ---
-  createRun(input: Omit<Run, "id">): Run {
-    const data = load();
-    const run: Run = { ...input, id: id() };
-    data.runs.push(run);
-    save(data);
-    return run;
+  async createRun(input: Omit<Run, "id">): Promise<Run> {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("runs")
+      .insert({
+        prompt_id: input.promptId,
+        engine: input.engine,
+        ran_at: input.ranAt,
+        response_text: input.responseText,
+        cited_urls: input.citedUrls,
+        status: input.status,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return toRun(data as RunRow);
   },
-  createMentions(inputs: Omit<Mention, "id">[]): Mention[] {
-    const data = load();
-    const created = inputs.map((m) => ({ ...m, id: id() }));
-    data.mentions.push(...created);
-    save(data);
-    return created;
+  async createMentions(inputs: Omit<Mention, "id">[]): Promise<Mention[]> {
+    if (inputs.length === 0) return [];
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("mentions")
+      .insert(
+        inputs.map((m) => ({
+          run_id: m.runId,
+          entity_name: m.entityName,
+          is_own_brand: m.isOwnBrand,
+          mentioned: m.mentioned,
+          rank: m.rank,
+          sentiment: m.sentiment,
+        }))
+      )
+      .select();
+    if (error) throw error;
+    return (data as MentionRow[]).map(toMention);
   },
-  listRunsByBrand(brandId: string): Run[] {
-    const data = load();
-    const promptIds = data.prompts.filter((p) => p.brandId === brandId).map((p) => p.id);
-    return data.runs.filter((r) => promptIds.includes(r.promptId));
+  async listRunsByBrand(brandId: string): Promise<Run[]> {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("runs")
+      .select("*, prompts!inner(brand_id)")
+      .eq("prompts.brand_id", brandId);
+    if (error) throw error;
+    return (data as RunRow[]).map(toRun);
   },
-  listRunsByPrompt(promptId: string): Run[] {
-    return load().runs.filter((r) => r.promptId === promptId);
+  async listRunsByPrompt(promptId: string): Promise<Run[]> {
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("runs").select("*").eq("prompt_id", promptId);
+    if (error) throw error;
+    return (data as RunRow[]).map(toRun);
   },
-  listMentionsByRunIds(runIds: string[]): Mention[] {
-    return load().mentions.filter((m) => runIds.includes(m.runId));
+  async listMentionsByRunIds(runIds: string[]): Promise<Mention[]> {
+    if (runIds.length === 0) return [];
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("mentions").select("*").in("run_id", runIds);
+    if (error) throw error;
+    return (data as MentionRow[]).map(toMention);
   },
 };

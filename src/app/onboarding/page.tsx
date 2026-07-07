@@ -8,7 +8,7 @@ export default async function OnboardingPage() {
   const user = await getSession();
   if (!user) redirect("/login");
 
-  const brands = db.listBrandsByUser(user.id);
+  const brands = await db.listBrandsByUser(user.id);
   if (brands.length >= PLAN_LIMITS[user.plan].maxBrands) redirect("/dashboard");
 
   return (

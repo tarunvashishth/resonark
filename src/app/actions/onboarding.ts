@@ -21,27 +21,42 @@ const brandSchema = z.object({
   prompts: z.array(z.object({ text: z.string().min(1), intentCategory: z.string() })).min(1),
 });
 
+// In-memory per-user lock: closes the same TOCTOU window flagged in
+// TODOS.md #11 — two concurrent createBrandWithPrompts calls for the same
+// user could otherwise both read "under the limit" before either writes a
+// brand. Same pattern as brand.ts's runNowAction lock.
+const usersCreatingBrand = new Set<string>();
+
 export async function createBrandWithPrompts(input: z.infer<typeof brandSchema>) {
   const user = await getSession();
   if (!user) redirect("/login");
 
-  const existing = db.listBrandsByUser(user.id);
-  const limit = PLAN_LIMITS[user.plan];
-  if (existing.length >= limit.maxBrands) {
-    throw new Error(`Your ${user.plan} plan allows ${limit.maxBrands} brand(s). Upgrade to add more.`);
+  if (usersCreatingBrand.has(user.id)) {
+    throw new Error("Already creating a brand — please wait a moment.");
   }
+  usersCreatingBrand.add(user.id);
 
-  const parsed = brandSchema.parse(input);
-  const brand = db.createBrand({
-    userId: user.id,
-    name: parsed.name,
-    domain: parsed.domain,
-    category: parsed.category,
-    competitors: parsed.competitors,
-  });
+  try {
+    const existing = await db.listBrandsByUser(user.id);
+    const limit = PLAN_LIMITS[user.plan];
+    if (existing.length >= limit.maxBrands) {
+      throw new Error(`Your ${user.plan} plan allows ${limit.maxBrands} brand(s). Upgrade to add more.`);
+    }
 
-  for (const p of parsed.prompts.slice(0, limit.maxPrompts)) {
-    db.createPrompt({ brandId: brand.id, text: p.text, intentCategory: p.intentCategory, active: true });
+    const parsed = brandSchema.parse(input);
+    const brand = await db.createBrand({
+      userId: user.id,
+      name: parsed.name,
+      domain: parsed.domain,
+      category: parsed.category,
+      competitors: parsed.competitors,
+    });
+
+    for (const p of parsed.prompts.slice(0, limit.maxPrompts)) {
+      await db.createPrompt({ brandId: brand.id, text: p.text, intentCategory: p.intentCategory, active: true });
+    }
+  } finally {
+    usersCreatingBrand.delete(user.id);
   }
 
   redirect("/dashboard");
