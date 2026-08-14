@@ -1,15 +1,16 @@
-# EchoRank
+# Resonark
 
 AI visibility monitoring — tracks whether ChatGPT, Gemini, and Perplexity mention a brand for buyer-intent prompts, self-serve, for small brands priced out of Profound/Peec/Otterly ($100-500+/mo).
 
-## Status: real Supabase backend, not yet deployed
+## Status: deployed to Cloudflare, mock AI engines until keys are set
 
-Persistence and auth run against a real Supabase project (Postgres + Auth) — `src/lib/db.ts` and `src/lib/auth.ts` are no longer the local-JSON-file MVP store, and sign-in is real email-OTP-code auth (Supabase Auth), not a fake email-only sign-in. `supabase/migrations/0001_init.sql` is applied; RLS policies scope every table to its owning user.
+Live at https://echorank.tarun-vashishth093.workers.dev (deployed 2026-07-07 under the old name — the next `npm run cf:deploy` creates the worker as `resonark`; delete the old `echorank` workers after cutover). Persistence and auth run against a real Supabase project (Postgres + Auth) with email-OTP-code sign-in; RLS policies scope every table to its owning user. The scheduler worker (`resonark-scheduler`, formerly `echorank-scheduler`, cron `0 13 * * *`) is deployed against the same Supabase project and verified via `wrangler dev --test-scheduled`.
 
-**What's left before a real deploy:**
-- The app hasn't been deployed to Cloudflare yet — `npm run cf:deploy` is still untested against the Supabase-backed version. `wrangler.jsonc`/`open-next.config.ts` are wired up; this is the next real step (see TODOS.md).
-- Auth uses Supabase's default (rate-limited) email sender — fine for low-volume testing, but a custom SMTP provider should be configured in the Supabase dashboard before real signups.
-- The scheduler worker (`workers/scheduler/`) already talks to the same Supabase project over REST — it should now be wired to the same data as the app (same `auth.users`/`profiles` schema), but hasn't been re-verified against it since this migration.
+**What's left before charging real users** (founder-only steps sequenced in LAUNCH.md):
+- `GEMINI_API_KEY` (free tier at aistudio.google.com — the free plan's only engine) must be set as a secret on both workers, or checks return simulated results. `OPENAI_API_KEY`/`PERPLEXITY_API_KEY` only matter once Pro exists.
+- Auth uses Supabase's default (rate-limited) email sender — configure custom SMTP in the Supabase dashboard before real signups. Weekly digests use Brevo: set `BREVO_API_KEY`/`BREVO_SENDER` on the scheduler worker.
+- Billing is implemented (Stripe payment link on the dashboard + `src/app/api/stripe/webhook` updates `profiles.plan`; runner parallelization per TODOS.md #2 shipped too). Still needed on the Stripe side: webhook endpoint + `STRIPE_WEBHOOK_SECRET` secret on the app worker, customer portal, and the USD payment link — see LAUNCH.md Part 1 §4.
+- Apply `supabase/migrations/0004_lock_profile_writes.sql` to production. Without it the 0001 `for all` policy lets any signed-in user PATCH `profiles.plan` to `pro` via PostgREST — Pro would be free for anyone who opens devtools.
 
 ## Local development
 
@@ -22,8 +23,8 @@ npm run build     # production Next.js build
 
 Copy `.env.local.example` to `.env.local` and fill in `SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` from your Supabase project settings. Add `OPENAI_API_KEY`/`GEMINI_API_KEY`/`PERPLEXITY_API_KEY` to swap in real AI engines — each falls back to the mock independently, so you can mix real and simulated engines.
 
-## Cloudflare (scaffolded, not deployed yet)
+## Cloudflare
 
-`wrangler.jsonc` and `open-next.config.ts` are wired up so `npm run preview` (build + local `wrangler dev`) proves the app *renders* under the real Workers runtime. A real `npm run cf:deploy` against the Supabase-backed version hasn't been done yet — see TODOS.md.
+`npm run cf:deploy` builds with OpenNext and deploys the app worker (`resonark`). Note: the session-refresh middleware lives in `src/middleware.ts` (edge runtime) rather than Next 16's `proxy.ts`, because OpenNext Cloudflare does not support Node.js middleware. Secrets bundled from `.env.local` at build time include only `SUPABASE_URL`/`SUPABASE_ANON_KEY` — keep the service-role key out of `.env.local` (it lives in `workers/scheduler/.dev.vars`).
 
 The scheduler worker (`workers/scheduler/`) is a separate Wrangler project — see its own README for deploy steps.

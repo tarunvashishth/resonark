@@ -30,6 +30,11 @@ vi.mock("@/lib/db", () => ({
     },
     listRunsByBrand: (brandId: string) =>
       state.runs.filter((r) => state.prompts.find((p) => p.id === r.promptId)?.brandId === brandId),
+    updateBrand: (brandId: string, fields: Partial<Brand>) => {
+      const b = state.brands.find((b) => b.id === brandId);
+      if (b) Object.assign(b, fields);
+      return b;
+    },
   },
 }));
 
@@ -38,7 +43,7 @@ vi.mock("@/lib/runner", () => ({
   runBrandNow: (...args: unknown[]) => runBrandNowMock(...args),
 }));
 
-const { runNowAction, togglePromptAction } = await import("./brand");
+const { runNowAction, togglePromptAction, updateBrandAction } = await import("./brand");
 
 function makeUser(overrides: Partial<User> = {}): User {
   return { id: "u1", email: "owner@example.com", plan: "free", createdAt: "", ...overrides };
@@ -151,6 +156,46 @@ describe("runNowAction", () => {
     runBrandNowMock.mockResolvedValue(1);
     await runNowAction("b1");
     expect(runBrandNowMock).toHaveBeenCalledWith(expect.anything(), "free");
+  });
+});
+
+describe("updateBrandAction", () => {
+  const validInput = { name: "Acme v2", domain: "acme.io", category: "widgets", competitors: ["Rival"] };
+
+  it("throws Not found when the brand belongs to a different user (ownership check)", async () => {
+    sessionUser = makeUser({ id: "u1" });
+    state.brands = [makeBrand({ id: "b1", userId: "someone-else" })];
+    await expect(updateBrandAction("b1", validInput)).rejects.toThrow("Not found");
+    expect(state.brands[0].name).toBe("Acme");
+  });
+
+  it("redirects to /login when there is no session", async () => {
+    sessionUser = null;
+    state.brands = [makeBrand()];
+    await expect(updateBrandAction("b1", validInput)).rejects.toThrow("REDIRECT:/login");
+  });
+
+  it("rejects an empty name without writing", async () => {
+    sessionUser = makeUser({ id: "u1" });
+    state.brands = [makeBrand({ id: "b1", userId: "u1" })];
+    await expect(updateBrandAction("b1", { ...validInput, name: "" })).rejects.toThrow();
+    expect(state.brands[0].name).toBe("Acme");
+  });
+
+  it("rejects more than 3 competitors without writing", async () => {
+    sessionUser = makeUser({ id: "u1" });
+    state.brands = [makeBrand({ id: "b1", userId: "u1" })];
+    await expect(
+      updateBrandAction("b1", { ...validInput, competitors: ["a", "b", "c", "d"] })
+    ).rejects.toThrow();
+    expect(state.brands[0].competitors).toEqual([]);
+  });
+
+  it("updates all editable fields for the owner", async () => {
+    sessionUser = makeUser({ id: "u1" });
+    state.brands = [makeBrand({ id: "b1", userId: "u1" })];
+    await updateBrandAction("b1", validInput);
+    expect(state.brands[0]).toMatchObject(validInput);
   });
 });
 

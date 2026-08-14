@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { z } from "zod";
 import { getSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { runBrandNow } from "@/lib/runner";
@@ -45,6 +46,22 @@ export async function runNowAction(brandId: string) {
   } finally {
     brandsRunningNow.delete(brandId);
   }
+}
+
+// Same field limits as onboarding's brandSchema (src/app/actions/onboarding.ts).
+const updateBrandSchema = z.object({
+  name: z.string().min(1).max(80),
+  domain: z.string().min(3).max(200),
+  category: z.string().min(2).max(120),
+  competitors: z.array(z.string().min(1)).max(3),
+});
+
+export async function updateBrandAction(brandId: string, input: z.infer<typeof updateBrandSchema>) {
+  await requireOwnedBrand(brandId);
+  const parsed = updateBrandSchema.parse(input);
+  await db.updateBrand(brandId, parsed);
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/settings");
 }
 
 export async function togglePromptAction(promptId: string, active: boolean) {
