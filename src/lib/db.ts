@@ -128,6 +128,25 @@ export const db = {
     if (error) throw error;
     return toBrand(data as BrandRow);
   },
+  async updateBrand(
+    brandId: string,
+    fields: Pick<Brand, "name" | "domain" | "category" | "competitors">
+  ): Promise<Brand> {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("brands")
+      .update({
+        name: fields.name,
+        domain: fields.domain,
+        category: fields.category,
+        competitors: fields.competitors,
+      })
+      .eq("id", brandId)
+      .select()
+      .single();
+    if (error) throw error;
+    return toBrand(data as BrandRow);
+  },
   async deleteBrand(brandId: string): Promise<void> {
     const supabase = await createClient();
     // prompts/runs/mentions cascade via foreign keys (on delete cascade in the schema).

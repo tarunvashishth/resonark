@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession, signOut } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { buildDashboard } from "@/lib/scoring";
+import { buildDashboard, type DashboardData } from "@/lib/scoring";
 import { PLAN_LIMITS } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,16 +23,33 @@ export default async function DashboardPage() {
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
-      <header className="mb-8 flex items-center justify-between">
+      <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="text-sm text-muted-foreground">{brand.domain}</p>
           <h1 className="text-2xl font-bold">{brand.name}</h1>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Badge variant="secondary" className="capitalize">
             {user.plan} plan · {limits.cadence}
           </Badge>
+          {user.plan === "free" && process.env.STRIPE_PAYMENT_LINK && (
+            <Button
+              size="sm"
+              nativeButton={false}
+              render={
+                <a href={`${process.env.STRIPE_PAYMENT_LINK}?client_reference_id=${user.id}&prefilled_email=${encodeURIComponent(user.email)}`}>
+                  Upgrade to Pro
+                </a>
+              }
+            />
+          )}
           <RunNowButton brandId={brand.id} />
+          <Button
+            variant="ghost"
+            size="sm"
+            nativeButton={false}
+            render={<Link href="/dashboard/settings">Settings</Link>}
+          />
           <form
             action={async () => {
               "use server";
@@ -133,69 +150,80 @@ export default async function DashboardPage() {
               <CardTitle>Prompts</CardTitle>
             </CardHeader>
             <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Prompt</TableHead>
-                    {limits.engines.map((eng) => (
-                      <TableHead key={eng} className="capitalize">
-                        {eng}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.promptRows.map(({ prompt, byEngine }) => (
-                    <TableRow key={prompt.id}>
-                      <TableCell className="max-w-sm">{prompt.text}</TableCell>
+              {/* Mobile: one card per prompt — a table with a column per engine
+                  (up to 3 on Pro) can't fit a 375px viewport. */}
+              <div className="space-y-3 md:hidden">
+                {data.promptRows.map(({ prompt, byEngine }) => (
+                  <div key={prompt.id} className="rounded-md border p-3">
+                    <p className="mb-3 text-sm">{prompt.text}</p>
+                    <div className="space-y-2">
                       {limits.engines.map((eng) => {
                         const cell = byEngine[eng];
-                        if (!cell) {
-                          return (
-                            <TableCell key={eng}>
-                              <span className="text-muted-foreground">—</span>
-                            </TableCell>
-                          );
-                        }
-                        const own = cell.mentions.find((m) => m.isOwnBrand);
-                        const competitors = cell.mentions.filter((m) => !m.isOwnBrand && m.mentioned);
                         return (
-                          <TableCell key={eng}>
-                            <details className="group">
-                              <summary className="cursor-pointer list-none">
-                                {own?.mentioned ? (
-                                  <Badge>#{own.rank} · {own.sentiment}</Badge>
-                                ) : (
-                                  <Badge variant="outline">not mentioned</Badge>
-                                )}
-                              </summary>
-                              <div className="mt-2 space-y-2 text-xs">
-                                {brand.competitors.length === 0 ? (
-                                  <p className="text-muted-foreground">No competitors added yet</p>
-                                ) : competitors.length > 0 ? (
-                                  <ul className="space-y-1">
-                                    {competitors.map((c) => (
-                                      <li key={c.id}>
-                                        {c.entityName} — #{c.rank} · {c.sentiment}
-                                      </li>
-                                    ))}
-                                  </ul>
-                                ) : (
-                                  <p className="text-muted-foreground">No competitors mentioned in this response</p>
-                                )}
-                                <p className="text-muted-foreground">Detected via keyword match — may miss aliases</p>
-                                <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded border p-2 text-muted-foreground">
-                                  {cell.run.responseText}
-                                </div>
+                          <div key={eng} className="text-sm">
+                            {cell ? (
+                              <details className="group">
+                                <summary className="flex cursor-pointer list-none items-center justify-between gap-2">
+                                  <span className="capitalize text-muted-foreground">{eng}</span>
+                                  <MentionBadge mentions={cell.mentions} />
+                                </summary>
+                                <MentionDetails cell={cell} hasCompetitors={brand.competitors.length > 0} />
+                              </details>
+                            ) : (
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="capitalize text-muted-foreground">{eng}</span>
+                                <span className="text-muted-foreground">—</span>
                               </div>
-                            </details>
-                          </TableCell>
+                            )}
+                          </div>
                         );
                       })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Prompt</TableHead>
+                      {limits.engines.map((eng) => (
+                        <TableHead key={eng} className="capitalize">
+                          {eng}
+                        </TableHead>
+                      ))}
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {data.promptRows.map(({ prompt, byEngine }) => (
+                      <TableRow key={prompt.id}>
+                        <TableCell className="max-w-sm">{prompt.text}</TableCell>
+                        {limits.engines.map((eng) => {
+                          const cell = byEngine[eng];
+                          if (!cell) {
+                            return (
+                              <TableCell key={eng}>
+                                <span className="text-muted-foreground">—</span>
+                              </TableCell>
+                            );
+                          }
+                          return (
+                            <TableCell key={eng}>
+                              <details className="group">
+                                <summary className="cursor-pointer list-none">
+                                  <MentionBadge mentions={cell.mentions} />
+                                </summary>
+                                <MentionDetails cell={cell} hasCompetitors={brand.competitors.length > 0} />
+                              </details>
+                            </TableCell>
+                          );
+                        })}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </CardContent>
           </Card>
 
@@ -227,5 +255,41 @@ export default async function DashboardPage() {
         </Link>
       </p>
     </main>
+  );
+}
+
+type EngineCell = NonNullable<DashboardData["promptRows"][number]["byEngine"][keyof DashboardData["promptRows"][number]["byEngine"]]>;
+
+function MentionBadge({ mentions }: { mentions: EngineCell["mentions"] }) {
+  const own = mentions.find((m) => m.isOwnBrand);
+  return own?.mentioned ? (
+    <Badge>#{own.rank} · {own.sentiment}</Badge>
+  ) : (
+    <Badge variant="outline">not mentioned</Badge>
+  );
+}
+
+function MentionDetails({ cell, hasCompetitors }: { cell: EngineCell; hasCompetitors: boolean }) {
+  const competitors = cell.mentions.filter((m) => !m.isOwnBrand && m.mentioned);
+  return (
+    <div className="mt-2 space-y-2 text-xs">
+      {!hasCompetitors ? (
+        <p className="text-muted-foreground">No competitors added yet</p>
+      ) : competitors.length > 0 ? (
+        <ul className="space-y-1">
+          {competitors.map((c) => (
+            <li key={c.id}>
+              {c.entityName} — #{c.rank} · {c.sentiment}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-muted-foreground">No competitors mentioned in this response</p>
+      )}
+      <p className="text-muted-foreground">Detected via keyword match — may miss aliases</p>
+      <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded border p-2 text-muted-foreground">
+        {cell.run.responseText}
+      </div>
+    </div>
   );
 }

@@ -4,7 +4,7 @@
 
 ### 1. Migrate persistence from local JSON store to Supabase
 
-**Completed:** 2026-07-05. Provisioned a real Supabase project (`echorank`, region ap-northeast-1), applied `supabase/migrations/0001_init.sql`, and rewrote `src/lib/db.ts` and `src/lib/auth.ts` against it.
+**Completed:** 2026-07-05. Provisioned a real Supabase project (`echorank` — predates the Resonark rename, region ap-northeast-1), applied `supabase/migrations/0001_init.sql`, and rewrote `src/lib/db.ts` and `src/lib/auth.ts` against it.
 
 **What changed from the original plan:**
 - `db.ts` is now fully async, querying Postgres via `@supabase/supabase-js`/`@supabase/ssr` through a per-request server client (`src/lib/supabase/server.ts`) so every query goes through RLS as the logged-in user. All callers (`runner.ts`, `scoring.ts`, server actions, dashboard/onboarding pages) updated to `await`.
@@ -19,6 +19,8 @@
 ---
 
 ## 2. Parallelize prompt×engine calls before Pro plan ships
+
+**Completed** (verified 2026-07-11): `shared/concurrency.ts`'s `runWithConcurrency` (cap 6, unit-tested in `concurrency.test.ts`) now drives both `src/lib/runner.ts`'s `runBrandNow` and `workers/scheduler/src/index.ts`'s `runBrand`.
 
 **What:** In `src/lib/runner.ts`'s `runBrandNow` and `workers/scheduler/src/index.ts`'s `runBrand`, batch engine calls with a concurrency cap instead of a fully sequential `for` loop.
 
@@ -64,43 +66,19 @@
 
 ## 5. Brand-settings page to edit competitors post-onboarding
 
-**What:** A page/form to edit a brand's name, domain, category, and competitors after the one-time onboarding wizard.
-
-**Why:** Surfaced during `/plan-design-review` (Pass 2, empty-competitor-state discussion, 2026-07-04) — there is currently no way to set or change `Brand.competitors` after onboarding. This limits both the existing share-of-voice chart and the new context-view feature (TODOS.md #4's v1): if a brand's competitive landscape changes, or a user skipped adding competitors during onboarding, they have no path to fix it.
-
-**Pros:** Unlocks real value from features that already depend on `Brand.competitors` (share-of-voice, context view); closes an obvious product gap for a self-serve tool.
-
-**Cons:** New page + form + server action — a real feature, not a quick add.
-
-**Depends on:** Nothing blocking — can be picked up any time.
+**Completed:** 2026-07-09. `/dashboard/settings` (linked from the dashboard header) edits name/domain/category/competitors via `updateBrandAction` (`src/app/actions/brand.ts`, same zod limits as onboarding, ownership-checked) and `db.updateBrand`. Covered by unit tests in `brand.test.ts`.
 
 ---
 
 ## 6. Mobile-responsive dashboard Prompts table
 
-**What:** Responsive layout for the dashboard's Prompts table (likely a card-based layout below some breakpoint, replacing the one-column-per-engine table).
-
-**Why:** Surfaced during `/plan-design-review` (Pass 6, 2026-07-04) — the table has one column per tracked AI engine (up to 3 on Pro plan) and likely overflows horizontally on mobile viewports (375px). Pre-existing, not caused by the context-view feature, but real: EchoRank is self-serve SaaS and founders/agency owners will check it from their phones.
-
-**Pros:** Fixes a real usability gap for mobile users of a self-serve product.
-
-**Cons:** Likely needs a genuinely different mobile layout (cards, not a shrunk table), not just CSS tweaks — real design + implementation work.
-
-**Depends on:** Nothing blocking — can be picked up any time.
+**Completed:** 2026-07-09. Below `md` the Prompts table renders as per-prompt cards (engine rows with badge + expandable details); shared `MentionBadge`/`MentionDetails` components keep the two layouts in sync. Dashboard header now flex-wraps. Verified live at 375px with real Gemini runs: no horizontal overflow, details expand correctly.
 
 ---
 
 ## 7. Derive plan cadence label from PLAN_CADENCE_MS instead of a second literal
 
-**What:** `PLAN_LIMITS[plan].cadence` (`src/lib/types.ts`, the "weekly"/"daily" string shown in the dashboard UI) and `PLAN_CADENCE_MS` (`shared/engines.ts`, the millisecond value that actually drives `workers/scheduler`'s scheduling) encode the same fact independently.
-
-**Why:** Surfaced during `/ship`'s maintainability specialist review (2026-07-04). Nothing ties the two together — changing one without the other would silently desync the dashboard's displayed cadence from the worker's real schedule.
-
-**Pros:** Removes a real drift risk with a small, self-contained fix (a helper that maps `PLAN_CADENCE_MS` to a display string).
-
-**Cons:** Touches two files (`shared/engines.ts`, `src/lib/types.ts`) — a real code change, not pure cleanup.
-
-**Depends on:** Nothing blocking — can be picked up any time.
+**Completed:** 2026-07-09. `planCadenceLabel()` in `shared/engines.ts` derives the label from `PLAN_CADENCE_MS`; `PLAN_LIMITS` in `src/lib/types.ts` now uses it instead of a second literal.
 
 ---
 
@@ -125,26 +103,10 @@
 
 ## 12. profiles.email goes stale if a user's auth email changes
 
-**What:** `handle_new_user()` (`supabase/migrations/0001_init.sql`) only mirrors `auth.users.email` to `profiles.email` on INSERT. There's no corresponding trigger for UPDATE, so if a user ever changes their auth email, `profiles.email` — which the weekly digest worker reads — goes stale and digests get sent to the old address.
-
-**Why:** Surfaced during `/ship`'s adversarial review (2026-07-04). Not currently reachable (no email-change UI exists yet), but worth fixing alongside the migration work in TODOS.md #1 before it becomes a real bug.
-
-**Pros:** Small, well-scoped SQL fix (an `AFTER UPDATE ON auth.users` trigger, or an upsert that updates on conflict).
-
-**Cons:** None significant.
-
-**Depends on:** Reasonable to bundle with TODOS.md #1 (Supabase migration) since it's the same schema file and same migration work.
+**Completed:** 2026-07-09. `supabase/migrations/0003_sync_profile_email.sql` adds an `AFTER UPDATE OF email ON auth.users` trigger mirroring the new email to `profiles.email`. Applied to the live project (`sync_profile_email`).
 
 ---
 
 ## 13. Weekly digest fan-out has no per-user error isolation
 
-**What:** `sendWeeklyDigests` (`workers/scheduler/src/index.ts`) checks `res.ok` after each Resend call (fixed this session) but doesn't wrap each user's work in try/catch — a thrown exception (network abort, DNS failure, timeout) on one user's request aborts the whole batch, skipping digests for every subsequent user in that run with no retry until next Monday.
-
-**Why:** Surfaced during `/ship`'s adversarial review (2026-07-04). This needs a product/ops decision (retry now vs. skip vs. alert) more than a mechanical fix.
-
-**Pros:** Prevents one user's transient failure from silently dropping digests for everyone processed after them in the same run.
-
-**Cons:** The right behavior (retry? alert? just skip and log?) is a product call, not obvious from the code alone.
-
-**Depends on:** Nothing blocking — can be picked up any time, once the retry/alert semantics are decided.
+**Completed:** 2026-07-09. Each user's digest work in `sendWeeklyDigests` (`workers/scheduler/src/index.ts`) is wrapped in try/catch — log and continue (skip semantics; no retry until next run, matching how per-engine failures are handled in `runBrand`).
