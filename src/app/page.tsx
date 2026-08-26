@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { PRICING_ENABLED } from "@/lib/types";
 
 const COMPETITORS = [
   { name: "Profound", price: "$399+/mo" },
@@ -37,7 +38,9 @@ const JSON_LD = {
     "Track whether ChatGPT, Gemini, and Perplexity mention your brand when buyers ask for recommendations — and which competitors they mention instead.",
   offers: [
     { "@type": "Offer", price: "0", priceCurrency: "USD", name: "Free — 1 brand, 5 prompts, weekly checks" },
-    { "@type": "Offer", price: "29", priceCurrency: "USD", name: "Pro — 3 brands, 25 prompts, 3 engines, daily checks" },
+    ...(PRICING_ENABLED
+      ? [{ "@type": "Offer", price: "29", priceCurrency: "USD", name: "Pro — 3 brands, 25 prompts, 3 engines, daily checks" }]
+      : []),
   ],
 };
 
@@ -93,40 +96,42 @@ export default function Home() {
         </p>
       </section>
 
-      <section className="border-t bg-muted/40 py-20">
-        <div className="mx-auto max-w-3xl px-4">
-          <h2 className="text-center text-3xl font-semibold tracking-tight">
-            Everyone else prices for enterprise
-          </h2>
-          <p className="mt-3 text-center text-muted-foreground">
-            AI visibility tools charge agency budgets. Small brands and indie founders are locked out.
-          </p>
-          <div className="mt-10 grid gap-4 sm:grid-cols-3">
-            {COMPETITORS.map((c) => (
-              <Card key={c.name} className="shadow-none">
+      {PRICING_ENABLED && (
+        <section className="border-t bg-muted/40 py-20">
+          <div className="mx-auto max-w-3xl px-4">
+            <h2 className="text-center text-3xl font-semibold tracking-tight">
+              Everyone else prices for enterprise
+            </h2>
+            <p className="mt-3 text-center text-muted-foreground">
+              AI visibility tools charge agency budgets. Small brands and indie founders are locked out.
+            </p>
+            <div className="mt-10 grid gap-4 sm:grid-cols-3">
+              {COMPETITORS.map((c) => (
+                <Card key={c.name} className="shadow-none">
+                  <CardContent className="pt-6 text-center">
+                    <p className="font-medium text-muted-foreground">{c.name}</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums text-foreground/70 line-through decoration-border">
+                      {c.price}
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            <div className="mt-6 text-center">
+              <Card className="mx-auto max-w-xs border-primary/40 shadow-lg shadow-primary/10">
                 <CardContent className="pt-6 text-center">
-                  <p className="font-medium text-muted-foreground">{c.name}</p>
-                  <p className="mt-1 text-lg font-semibold tabular-nums text-foreground/70 line-through decoration-border">
-                    {c.price}
-                  </p>
+                  <div className="flex items-center justify-center gap-2">
+                    <p className="font-semibold">Resonark</p>
+                    <Badge className="text-[10px] uppercase tracking-wide">That’s us</Badge>
+                  </div>
+                  <p className="mt-1 text-lg font-semibold tabular-nums text-primary">$29/mo</p>
+                  <p className="text-sm text-muted-foreground">self-serve</p>
                 </CardContent>
               </Card>
-            ))}
+            </div>
           </div>
-          <div className="mt-6 text-center">
-            <Card className="mx-auto max-w-xs border-primary/40 shadow-lg shadow-primary/10">
-              <CardContent className="pt-6 text-center">
-                <div className="flex items-center justify-center gap-2">
-                  <p className="font-semibold">Resonark</p>
-                  <Badge className="text-[10px] uppercase tracking-wide">That’s us</Badge>
-                </div>
-                <p className="mt-1 text-lg font-semibold tabular-nums text-primary">$29/mo</p>
-                <p className="text-sm text-muted-foreground">self-serve</p>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section id="how-it-works" className="border-t py-20">
         <div className="mx-auto max-w-4xl px-4">

@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getSession, signOut } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { buildDashboard, type DashboardData } from "@/lib/scoring";
-import { PLAN_LIMITS } from "@/lib/types";
+import { PLAN_LIMITS, PRICING_ENABLED } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,7 +32,7 @@ export default async function DashboardPage() {
           <Badge variant="secondary" className="capitalize">
             {user.plan} plan · {limits.cadence}
           </Badge>
-          {user.plan === "free" && process.env.STRIPE_PAYMENT_LINK && (
+          {PRICING_ENABLED && user.plan === "free" && process.env.STRIPE_PAYMENT_LINK && (
             <Button
               size="sm"
               nativeButton={false}

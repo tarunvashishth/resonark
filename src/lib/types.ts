@@ -2,6 +2,11 @@ import { PLAN_ENGINES, type Engine, type Plan } from "../../shared/engines";
 
 export type { Engine, Plan };
 
+// Pricing/upgrade UI is hidden while everyone is on the free tier. Flip to
+// true to bring back the pricing section and the "Upgrade to Pro" CTA —
+// PLAN_LIMITS and the Stripe webhook stay wired underneath either way.
+export const PRICING_ENABLED = false;
+
 export const PLAN_LIMITS: Record<
   Plan,
   { maxBrands: number; maxPrompts: number; engines: Engine[]; cadence: "weekly" | "daily" }
